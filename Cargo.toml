@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/activity_indicator",
-    "crates/ai",
     "crates/assets",
     "crates/assistant",
     "crates/audio",
@@ -35,6 +34,7 @@ members = [
     "crates/fuzzy",
     "crates/git",
     "crates/go_to_line",
+    "crates/google_ai",
     "crates/gpui",
     "crates/gpui_macros",
     "crates/image_viewer",
@@ -53,6 +53,7 @@ members = [
     "crates/multi_buffer",
     "crates/node_runtime",
     "crates/notifications",
+    "crates/open_ai",
     "crates/outline",
     "crates/picker",
     "crates/prettier",
@@ -70,7 +71,6 @@ members = [
     "crates/task",
     "crates/tasks_ui",
     "crates/search",
-    "crates/semantic_index",
     "crates/settings",
     "crates/snippet",
     "crates/sqlez",
@@ -140,6 +140,7 @@ fsevent = { path = "crates/fsevent" }
 fuzzy = { path = "crates/fuzzy" }
 git = { path = "crates/git" }
 go_to_line = { path = "crates/go_to_line" }
+google_ai = { path = "crates/google_ai" }
 gpui = { path = "crates/gpui" }
 gpui_macros = { path = "crates/gpui_macros" }
 install_cli = { path = "crates/install_cli" }
@@ -158,6 +159,7 @@ menu = { path = "crates/menu" }
 multi_buffer = { path = "crates/multi_buffer" }
 node_runtime = { path = "crates/node_runtime" }
 notifications = { path = "crates/notifications" }
+open_ai = { path = "crates/open_ai" }
 outline = { path = "crates/outline" }
 picker = { path = "crates/picker" }
 plugin = { path = "crates/plugin" }
@@ -176,7 +178,6 @@ rpc = { path = "crates/rpc" }
 task = { path = "crates/task" }
 tasks_ui = { path = "crates/tasks_ui" }
 search = { path = "crates/search" }
-semantic_index = { path = "crates/semantic_index" }
 settings = { path = "crates/settings" }
 snippet = { path = "crates/snippet" }
 sqlez = { path = "crates/sqlez" }
