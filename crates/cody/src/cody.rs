@@ -345,7 +345,7 @@ impl Cody {
         let server_id = self.server_id;
         let http = self.http.clone();
         let node_runtime = self.node_runtime.clone();
-        if all_language_settings(None, cx).cody_enabled(None, None) {
+        if all_language_settings(None, cx).copilot_enabled(None, None) {
             if matches!(self.server, CodyServer::Disabled) {
                 let start_task = cx
                     .spawn(move |this, cx| {
@@ -954,39 +954,13 @@ async fn clear_cody_dir() {
 async fn get_cody_lsp(http: Arc<dyn HttpClient>) -> anyhow::Result<PathBuf> {
     const SERVER_PATH: &str = "dist/agent.js";
 
+    // TODO: Fetch latest cody agent from somewhere
+
     ///Check for the latest cody language server and download it if we haven't already
-    async fn fetch_latest(http: Arc<dyn HttpClient>) -> anyhow::Result<PathBuf> {
-        let release =
-            latest_github_release("zed-industries/cody", true, false, http.clone()).await?;
+    async fn fetch_latest(_http: Arc<dyn HttpClient>) -> anyhow::Result<PathBuf> {
+        let server_path = &*paths::CODY_DIR.join(SERVER_PATH);
 
-        let version_dir = &*paths::COPILOT_DIR.join(format!("cody-{}", release.tag_name));
-
-        fs::create_dir_all(version_dir).await?;
-        let server_path = version_dir.join(SERVER_PATH);
-
-        if fs::metadata(&server_path).await.is_err() {
-            // Cody LSP looks for this dist dir specifically, so lets add it in.
-            let dist_dir = version_dir.join("dist");
-            fs::create_dir_all(dist_dir.as_path()).await?;
-
-            let url = &release
-                .assets
-                .get(0)
-                .context("Github release for cody contained no assets")?
-                .browser_download_url;
-
-            let mut response = http
-                .get(url, Default::default(), true)
-                .await
-                .context("error downloading cody release")?;
-            let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-            let archive = Archive::new(decompressed_bytes);
-            archive.unpack(dist_dir).await?;
-
-            remove_matching(&paths::COPILOT_DIR, |entry| entry != version_dir).await;
-        }
-
-        Ok(server_path)
+        Ok(server_path.to_path_buf())
     }
 
     match fetch_latest(http).await {
