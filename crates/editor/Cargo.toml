@@ -32,6 +32,7 @@ aho-corasick = "1.1"
 anyhow.workspace = true
 client.workspace = true
 clock.workspace = true
+cody.workspace = true
 collections.workspace = true
 convert_case = "0.6.0"
 copilot.workspace = true
@@ -73,6 +74,7 @@ util.workspace = true
 workspace.workspace = true
 
 [dev-dependencies]
+cody = { workspace = true, features = ["test-support"] }
 copilot = { workspace = true, features = ["test-support"] }
 ctor.workspace = true
 env_logger.workspace = true
