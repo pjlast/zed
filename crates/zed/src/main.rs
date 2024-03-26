@@ -183,6 +183,12 @@ fn main() {
             cx,
         );
         assistant::init(client.clone(), cx);
+        cody::init(
+            cody_language_server_id,
+            http.clone(),
+            node_runtime.clone(),
+            cx,
+        );
 
         extension::init(
             fs.clone(),
