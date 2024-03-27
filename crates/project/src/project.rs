@@ -16,6 +16,7 @@ use client::{
     proto, Client, Collaborator, PendingEntitySubscription, ProjectId, TypedEnvelope, UserStore,
 };
 use clock::ReplicaId;
+use cody::Cody;
 use collections::{hash_map, BTreeMap, HashMap, HashSet, VecDeque};
 use copilot::Copilot;
 use debounced_delay::DebouncedDelay;
@@ -197,6 +198,8 @@ pub struct Project {
     terminals: Terminals,
     copilot_lsp_subscription: Option<gpui::Subscription>,
     copilot_log_subscription: Option<lsp::Subscription>,
+    cody_lsp_subscription: Option<gpui::Subscription>,
+    cody_log_subscription: Option<lsp::Subscription>,
     current_lsp_settings: HashMap<Arc<str>, LspSettings>,
     node: Option<Arc<dyn NodeRuntime>>,
     default_prettier: DefaultPrettier,
@@ -609,6 +612,8 @@ impl Project {
                 .detach();
             let copilot_lsp_subscription =
                 Copilot::global(cx).map(|copilot| subscribe_for_copilot_events(&copilot, cx));
+            let cody_lsp_subscription =
+                Cody::global(cx).map(|cody| subscribe_for_cody_events(&cody, cx));
             let tasks = Inventory::new(cx);
 
             Self {
@@ -660,6 +665,8 @@ impl Project {
                 },
                 copilot_lsp_subscription,
                 copilot_log_subscription: None,
+                cody_lsp_subscription,
+                cody_log_subscription: None,
                 current_lsp_settings: ProjectSettings::get_global(cx).lsp.clone(),
                 node: Some(node),
                 default_prettier: DefaultPrettier::default(),
@@ -727,6 +734,8 @@ impl Project {
                 .detach();
             let copilot_lsp_subscription =
                 Copilot::global(cx).map(|copilot| subscribe_for_copilot_events(&copilot, cx));
+            let cody_lsp_subscription =
+                Cody::global(cx).map(|cody| subscribe_for_cody_events(&cody, cx));
             let mut this = Self {
                 worktrees: Vec::new(),
                 buffer_ordered_messages_tx: tx,
@@ -795,6 +804,8 @@ impl Project {
                 },
                 copilot_lsp_subscription,
                 copilot_log_subscription: None,
+                cody_lsp_subscription,
+                cody_log_subscription: None,
                 current_lsp_settings: ProjectSettings::get_global(cx).lsp.clone(),
                 node: None,
                 default_prettier: DefaultPrettier::default(),
@@ -1038,6 +1049,17 @@ impl Project {
                     }
                 }
                 self.copilot_lsp_subscription = Some(subscribe_for_copilot_events(&copilot, cx));
+            }
+        }
+
+        if self.cody_lsp_subscription.is_none() {
+            if let Some(cody) = Cody::global(cx) {
+                for buffer in self.opened_buffers.values() {
+                    if let Some(buffer) = buffer.upgrade() {
+                        self.register_buffer_with_copilot(&buffer, cx);
+                    }
+                }
+                self.cody_lsp_subscription = Some(subscribe_for_cody_events(&cody, cx));
             }
         }
 
@@ -2509,6 +2531,7 @@ impl Project {
                         snapshot: next_snapshot.clone(),
                     });
 
+                    println!("{}", language_server.name());
                     language_server
                         .notify::<lsp::notification::DidChangeTextDocument>(
                             lsp::DidChangeTextDocumentParams {
@@ -9368,6 +9391,47 @@ fn subscribe_for_copilot_events(
                         }
                     }
                     None => debug_panic!("Received Copilot language server started event, but no language server is running"),
+                }
+            }
+        },
+    )
+}
+
+fn subscribe_for_cody_events(
+    cody: &Model<Cody>,
+    cx: &mut ModelContext<'_, Project>,
+) -> gpui::Subscription {
+    cx.subscribe(
+        cody,
+        |project, cody, cody_event, cx| match cody_event {
+            cody::Event::CodyLanguageServerStarted => {
+                match cody.read(cx).language_server() {
+                    Some((name, cody_server)) => {
+                        // Another event wants to re-add the server that was already added and subscribed to, avoid doing it again.
+                        if !cody_server.has_notification_handler::<cody::request::LogMessage>() {
+                            let new_server_id = cody_server.server_id();
+                            let weak_project = cx.weak_model();
+                            let cody_log_subscription = cody_server
+                                .on_notification::<cody::request::LogMessage, _>(
+                                    move |params, mut cx| {
+                                        weak_project.update(&mut cx, |_, cx| {
+                                            cx.emit(Event::LanguageServerLog(
+                                                new_server_id,
+                                                params.message,
+                                            ));
+                                        }).ok();
+                                    },
+                                );
+                            project.supplementary_language_servers.insert(new_server_id, (name.clone(), Arc::clone(cody_server)));
+                            if let LanguageServerName(nm) = name {
+                            println!("{}, {:?}", nm, cody_server);
+                            };
+                            project.cody_log_subscription = Some(cody_log_subscription);
+                            cx.emit(Event::LanguageServerAdded(new_server_id));
+                            println!("Language server added");
+                        }
+                    }
+                    None => debug_panic!("Received Cody language server started event, but no language server is running"),
                 }
             }
         },

@@ -14,6 +14,99 @@ impl lsp::request::Request for CheckStatus {
     const METHOD: &'static str = "checkStatus";
 }
 
+pub enum Initialize {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionConfiguration {
+    pub server_endpoint: String,
+    pub access_token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeParams {
+    /// The process Id of the parent process that started
+    /// the server. Is null if the process has not been started by another process.
+    /// If the parent process is not alive then the server should exit (see exit notification) its process.
+    pub process_id: Option<u32>,
+
+    /// The rootPath of the workspace. Is null
+    /// if no folder is open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deprecated(note = "Use `root_uri` instead when possible")]
+    pub root_path: Option<String>,
+
+    /// The rootUri of the workspace. Is null if no
+    /// folder is open. If both `rootPath` and `rootUri` are set
+    /// `rootUri` wins.
+    ///
+    /// Deprecated in favour of `workspaceFolders`
+    #[serde(default)]
+    pub root_uri: Option<lsp::Url>,
+
+    /// User provided initialization options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initialization_options: Option<serde_json::value::Value>,
+
+    /// The capabilities provided by the client (editor or tool)
+    pub capabilities: lsp::ClientCapabilities,
+
+    /// The initial trace setting. If omitted trace is disabled ('off').
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<lsp::TraceValue>,
+
+    /// The workspace folders configured in the client when the server starts.
+    /// This property is only available if the client supports workspace folders.
+    /// It can be `null` if the client supports workspace folders but none are
+    /// configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_folders: Option<Vec<lsp::WorkspaceFolder>>,
+
+    /// Information about the client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<lsp::ClientInfo>,
+
+    /// The locale the client is currently showing the user interface
+    /// in. This must not necessarily be the locale of the operating
+    /// system.
+    ///
+    /// Uses IETF language tags as the value's syntax
+    /// (See <https://en.wikipedia.org/wiki/IETF_language_tag>)
+    ///
+    /// @since 3.16.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_configuration: Option<ExtensionConfiguration>,
+}
+
+#[derive(Debug, PartialEq, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResult {
+    /// The capabilities the language server provides.
+    pub capabilities: lsp::ServerCapabilities,
+
+    /// Information about the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_info: Option<lsp::ServerInfo>,
+
+    /// Unofficial UT8-offsets extension.
+    ///
+    /// See https://clangd.llvm.org/extensions.html#utf-8-offsets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(feature = "proposed")]
+    pub offset_encoding: Option<String>,
+}
+
+impl lsp::request::Request for Initialize {
+    type Params = InitializeParams;
+    type Result = InitializeResult;
+    const METHOD: &'static str = "initialize";
+}
+
 pub enum SignInInitiate {}
 
 #[derive(Debug, Serialize, Deserialize)]

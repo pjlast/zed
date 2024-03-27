@@ -16,6 +16,7 @@ use lsp::{LanguageServer, LanguageServerBinary, LanguageServerId};
 use node_runtime::NodeRuntime;
 use parking_lot::Mutex;
 use request::StatusNotification;
+use serde_json::json;
 use settings::SettingsStore;
 use smol::{fs, stream::StreamExt};
 use std::{
@@ -400,7 +401,7 @@ impl Cody {
             let start_language_server = async {
                 let server_path = get_cody_lsp(http).await?;
                 let node_path = node_runtime.binary_path().await?;
-                let arguments: Vec<OsString> = vec![server_path.into(), "--stdio".into()];
+                let arguments: Vec<OsString> = vec![server_path.into()];
                 let mut env = HashMap::default();
                 env.insert(
                     String::from("SRC_ENDPOINT"),
@@ -409,6 +410,10 @@ impl Cody {
                 env.insert(
                     String::from("SRC_ACCESS_TOKEN"),
                     std::env::var("SRC_ACCESS_TOKEN").unwrap(),
+                );
+                env.insert(
+                    String::from("CODY_AGENT_TRACE_PATH"),
+                    String::from("/Users/pjlast/workspace/pjlast/zed/codyagent.json"),
                 );
                 let binary = LanguageServerBinary {
                     path: node_path,
@@ -431,30 +436,234 @@ impl Cody {
                         |_, _| { /* Silence the notification */ },
                     )
                     .detach();
-                let server = cx.update(|cx| server.initialize(None, cx))?.await?;
+                // let server = cx.update(|cx| server.initialize(None, cx))?.await?;
 
-                let status = server
-                    .request::<request::CheckStatus>(request::CheckStatusParams {
-                        local_checks_only: false,
-                    })
+                let server = cx
+                    .update(|cx| {
+                        let root_uri = lsp::Url::from_file_path(&server.root_path()).unwrap();
+                        #[allow(deprecated)]
+                        let params = request::InitializeParams {
+                            process_id: None,
+                            root_path: None,
+                            root_uri: Some(root_uri.clone()),
+                            initialization_options: None,
+                            extension_configuration: Some(request::ExtensionConfiguration {
+                                server_endpoint: String::from("https://sourcegraph.com/"),
+                                access_token: std::env::var("SRC_ACCESS_TOKEN").unwrap(),
+                            }),
+                            capabilities: lsp::ClientCapabilities {
+                                workspace: Some(lsp::WorkspaceClientCapabilities {
+                                    configuration: Some(true),
+                                    did_change_watched_files: Some(
+                                        lsp::DidChangeWatchedFilesClientCapabilities {
+                                            dynamic_registration: Some(true),
+                                            relative_pattern_support: Some(true),
+                                        },
+                                    ),
+                                    did_change_configuration: Some(
+                                        lsp::DynamicRegistrationClientCapabilities {
+                                            dynamic_registration: Some(true),
+                                        },
+                                    ),
+                                    workspace_folders: Some(true),
+                                    symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
+                                        resolve_support: None,
+                                        ..lsp::WorkspaceSymbolClientCapabilities::default()
+                                    }),
+                                    inlay_hint: Some(lsp::InlayHintWorkspaceClientCapabilities {
+                                        refresh_support: Some(true),
+                                    }),
+                                    diagnostic: Some(lsp::DiagnosticWorkspaceClientCapabilities {
+                                        refresh_support: None,
+                                    }),
+                                    workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
+                                        resource_operations: Some(vec![
+                                            lsp::ResourceOperationKind::Create,
+                                            lsp::ResourceOperationKind::Rename,
+                                            lsp::ResourceOperationKind::Delete,
+                                        ]),
+                                        document_changes: Some(true),
+                                        ..lsp::WorkspaceEditClientCapabilities::default()
+                                    }),
+                                    ..Default::default()
+                                }),
+                                text_document: Some(lsp::TextDocumentClientCapabilities {
+                                    definition: Some(lsp::GotoCapability {
+                                        link_support: Some(true),
+                                        dynamic_registration: None,
+                                    }),
+                                    code_action: Some(lsp::CodeActionClientCapabilities {
+                                        code_action_literal_support: Some(
+                                            lsp::CodeActionLiteralSupport {
+                                                code_action_kind:
+                                                    lsp::CodeActionKindLiteralSupport {
+                                                        value_set: vec![
+                                                            lsp::CodeActionKind::REFACTOR
+                                                                .as_str()
+                                                                .into(),
+                                                            lsp::CodeActionKind::QUICKFIX
+                                                                .as_str()
+                                                                .into(),
+                                                            lsp::CodeActionKind::SOURCE
+                                                                .as_str()
+                                                                .into(),
+                                                        ],
+                                                    },
+                                            },
+                                        ),
+                                        data_support: Some(true),
+                                        resolve_support: Some(
+                                            lsp::CodeActionCapabilityResolveSupport {
+                                                properties: vec![
+                                                    "kind".to_string(),
+                                                    "diagnostics".to_string(),
+                                                    "isPreferred".to_string(),
+                                                    "disabled".to_string(),
+                                                    "edit".to_string(),
+                                                    "command".to_string(),
+                                                ],
+                                            },
+                                        ),
+                                        ..Default::default()
+                                    }),
+                                    completion: Some(lsp::CompletionClientCapabilities {
+                                        completion_item: Some(lsp::CompletionItemCapability {
+                                            snippet_support: Some(true),
+                                            resolve_support: Some(
+                                                lsp::CompletionItemCapabilityResolveSupport {
+                                                    properties: vec![
+                                                        "documentation".to_string(),
+                                                        "additionalTextEdits".to_string(),
+                                                    ],
+                                                },
+                                            ),
+                                            insert_replace_support: Some(true),
+                                            ..Default::default()
+                                        }),
+                                        completion_list: Some(lsp::CompletionListCapability {
+                                            item_defaults: Some(vec![
+                                                "commitCharacters".to_owned(),
+                                                "editRange".to_owned(),
+                                                "insertTextMode".to_owned(),
+                                                "data".to_owned(),
+                                            ]),
+                                        }),
+                                        ..Default::default()
+                                    }),
+                                    rename: Some(lsp::RenameClientCapabilities {
+                                        prepare_support: Some(true),
+                                        ..Default::default()
+                                    }),
+                                    hover: Some(lsp::HoverClientCapabilities {
+                                        content_format: Some(vec![lsp::MarkupKind::Markdown]),
+                                        dynamic_registration: None,
+                                    }),
+                                    inlay_hint: Some(lsp::InlayHintClientCapabilities {
+                                        resolve_support: Some(
+                                            lsp::InlayHintResolveClientCapabilities {
+                                                properties: vec![
+                                                    "textEdits".to_string(),
+                                                    "tooltip".to_string(),
+                                                    "label.tooltip".to_string(),
+                                                    "label.location".to_string(),
+                                                    "label.command".to_string(),
+                                                ],
+                                            },
+                                        ),
+                                        dynamic_registration: Some(false),
+                                    }),
+                                    publish_diagnostics: Some(
+                                        lsp::PublishDiagnosticsClientCapabilities {
+                                            related_information: Some(true),
+                                            ..Default::default()
+                                        },
+                                    ),
+                                    formatting: Some(lsp::DynamicRegistrationClientCapabilities {
+                                        dynamic_registration: None,
+                                    }),
+                                    on_type_formatting: Some(
+                                        lsp::DynamicRegistrationClientCapabilities {
+                                            dynamic_registration: None,
+                                        },
+                                    ),
+                                    diagnostic: Some(lsp::DiagnosticClientCapabilities {
+                                        related_document_support: Some(true),
+                                        dynamic_registration: None,
+                                    }),
+                                    ..Default::default()
+                                }),
+                                experimental: Some(json!({
+                                    "serverStatusNotification": true,
+                                })),
+                                window: Some(lsp::WindowClientCapabilities {
+                                    work_done_progress: Some(true),
+                                    ..Default::default()
+                                }),
+                                general: None,
+                            },
+                            trace: None,
+                            workspace_folders: Some(vec![lsp::WorkspaceFolder {
+                                uri: root_uri,
+                                name: Default::default(),
+                            }]),
+                            client_info: release_channel::ReleaseChannel::try_global(cx).map(
+                                |release_channel| lsp::ClientInfo {
+                                    name: release_channel.display_name().to_string(),
+                                    version: Some(
+                                        release_channel::AppVersion::global(cx).to_string(),
+                                    ),
+                                },
+                            ),
+                            locale: None,
+                        };
+                        // server.request::<request::Initialize>(params)
+                        cx.spawn(|_| async move {
+                            let response = server.request::<request::Initialize>(params).await?;
+                            let server = if let Some(info) = response.server_info {
+                                server.set_name(info.name)
+                            } else {
+                                server
+                            };
+                            let server = server.set_capabilities(response.capabilities);
+
+                            server.notify::<lsp::notification::Initialized>(
+                                lsp::InitializedParams {},
+                            )?;
+                            Ok::<std::sync::Arc<LanguageServer>, anyhow::Error>(Arc::new(server))
+                        })
+                    })?
                     .await?;
 
-                server
-                    .request::<request::SetEditorInfo>(request::SetEditorInfoParams {
-                        editor_info: request::EditorInfo {
-                            name: "zed".into(),
-                            version: env!("CARGO_PKG_VERSION").into(),
-                        },
-                        editor_plugin_info: request::EditorPluginInfo {
-                            name: "zed-cody".into(),
-                            version: "0.0.1".into(),
-                        },
-                    })
-                    .await?;
+                // println!("Get status");
+                // let status = server
+                //     .request::<request::CheckStatus>(request::CheckStatusParams {
+                //         local_checks_only: false,
+                //     })
+                //     .await?;
 
-                anyhow::Ok((server, status))
+                // println!("Set editor info");
+                // server
+                //     .request::<request::SetEditorInfo>(request::SetEditorInfoParams {
+                //         editor_info: request::EditorInfo {
+                //             name: "zed".into(),
+                //             version: env!("CARGO_PKG_VERSION").into(),
+                //         },
+                //         editor_plugin_info: request::EditorPluginInfo {
+                //             name: "zed-cody".into(),
+                //             version: "0.0.1".into(),
+                //         },
+                //     })
+                //     .await?;
+
+                anyhow::Ok((
+                    server,
+                    request::SignInStatus::Ok {
+                        user: Some("pjlast".to_string()),
+                    },
+                ))
             };
 
+            println!("Start language server");
             let server = start_language_server.await;
             this.update(&mut cx, |this, cx| {
                 cx.notify();
@@ -468,6 +677,7 @@ impl Cody {
                         });
                         cx.emit(Event::CodyLanguageServerStarted);
                         this.update_sign_in_status(status, cx);
+                        println!("Sign in status updated");
                     }
                     Err(error) => {
                         this.server = CodyServer::Error(error.to_string().into());
@@ -476,6 +686,7 @@ impl Cody {
                 }
             })
             .ok();
+            println!("Done!");
         }
     }
 
@@ -909,6 +1120,7 @@ impl Cody {
                 | request::SignInStatus::MaybeOk { .. }
                 | request::SignInStatus::AlreadySignedIn { .. } => {
                     server.sign_in_status = SignInStatus::Authorized;
+                    println!("Sign in status: Authorized");
                     for buffer in self.buffers.iter().cloned().collect::<Vec<_>>() {
                         if let Some(buffer) = buffer.upgrade() {
                             self.register_buffer(&buffer, cx);

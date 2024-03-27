@@ -138,9 +138,11 @@ impl LogStore {
                     }),
                     cx.subscribe(project, |this, project, event, cx| match event {
                         project::Event::LanguageServerAdded(id) => {
+                            println!("LanguageServerAdded: {}", id);
                             this.add_language_server(&project, *id, cx);
                         }
                         project::Event::LanguageServerRemoved(id) => {
+                            println!("LanguageServerRemoved: {}", id);
                             this.remove_language_server(&project, *id, cx);
                         }
                         project::Event::LanguageServerLog(id, message) => {
