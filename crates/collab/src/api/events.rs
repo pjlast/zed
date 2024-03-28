@@ -277,6 +277,7 @@ pub async fn post_events(
                 first_event_at,
                 country_code.clone(),
             )),
+            Event::Cody(_event) => (),
             Event::Call(event) => to_upload.call_events.push(CallEventRow::from_event(
                 event.clone(),
                 &wrapper,

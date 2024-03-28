@@ -346,7 +346,10 @@ impl EditorElement {
         });
         register_action(view, cx, Editor::next_copilot_suggestion);
         register_action(view, cx, Editor::previous_copilot_suggestion);
+        register_action(view, cx, Editor::next_cody_suggestion);
+        register_action(view, cx, Editor::previous_cody_suggestion);
         register_action(view, cx, Editor::copilot_suggest);
+        register_action(view, cx, Editor::cody_suggest);
         register_action(view, cx, Editor::context_menu_first);
         register_action(view, cx, Editor::context_menu_prev);
         register_action(view, cx, Editor::context_menu_next);
@@ -355,6 +358,7 @@ impl EditorElement {
         register_action(view, cx, Editor::unique_lines_case_insensitive);
         register_action(view, cx, Editor::unique_lines_case_sensitive);
         register_action(view, cx, Editor::accept_partial_copilot_suggestion);
+        register_action(view, cx, Editor::accept_partial_cody_suggestion);
         register_action(view, cx, Editor::revert_selected_hunks);
     }
 

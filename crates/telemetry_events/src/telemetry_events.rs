@@ -54,6 +54,7 @@ impl Display for AssistantKind {
 pub enum Event {
     Editor(EditorEvent),
     Copilot(CopilotEvent),
+    Cody(CodyEvent),
     Call(CallEvent),
     Assistant(AssistantEvent),
     Cpu(CpuEvent),
@@ -76,6 +77,13 @@ pub struct EditorEvent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CopilotEvent {
+    pub suggestion_id: Option<String>,
+    pub suggestion_accepted: bool,
+    pub file_extension: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodyEvent {
     pub suggestion_id: Option<String>,
     pub suggestion_accepted: bool,
     pub file_extension: Option<String>,
