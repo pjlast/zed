@@ -186,7 +186,8 @@ pub enum GetCompletions {}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetCompletionsParams {
-    pub doc: GetCompletionsDocument,
+    pub uri: String,
+    pub position: lsp::Position,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -204,23 +205,22 @@ pub struct GetCompletionsDocument {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetCompletionsResult {
+    #[serde(rename(deserialize = "items"))]
     pub completions: Vec<Completion>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Completion {
-    pub text: String,
-    pub position: lsp::Position,
-    pub uuid: String,
+    pub insert_text: String,
+    pub id: String,
     pub range: lsp::Range,
-    pub display_text: String,
 }
 
 impl lsp::request::Request for GetCompletions {
     type Params = GetCompletionsParams;
     type Result = GetCompletionsResult;
-    const METHOD: &'static str = "getCompletions";
+    const METHOD: &'static str = "autocomplete/execute";
 }
 
 pub enum GetCompletionsCycling {}
@@ -229,6 +229,34 @@ impl lsp::request::Request for GetCompletionsCycling {
     type Params = GetCompletionsParams;
     type Result = GetCompletionsResult;
     const METHOD: &'static str = "getCompletionsCycling";
+}
+
+pub enum DidOpenTextDocument {}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DidOpenTextDocumentParams {
+    pub uri: String,
+    pub content: String,
+}
+
+impl lsp::notification::Notification for DidOpenTextDocument {
+    type Params = DidOpenTextDocumentParams;
+    const METHOD: &'static str = "textDocument/didOpen";
+}
+
+pub enum DidChangeTextDocument {}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DidChangeTextDocumentParams {
+    pub uri: String,
+    pub content: String,
+}
+
+impl lsp::notification::Notification for DidChangeTextDocument {
+    type Params = DidChangeTextDocumentParams;
+    const METHOD: &'static str = "textDocument/didChange";
 }
 
 pub enum LogMessage {}

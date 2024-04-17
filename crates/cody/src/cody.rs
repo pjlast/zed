@@ -240,18 +240,15 @@ impl RegisteredBuffer {
                     if !content_changes.is_empty() {
                         buffer.snapshot_version += 1;
                         buffer.snapshot = new_snapshot;
-                        server
-                            .lsp
-                            .notify::<lsp::notification::DidChangeTextDocument>(
-                                lsp::DidChangeTextDocumentParams {
-                                    text_document: lsp::VersionedTextDocumentIdentifier::new(
-                                        buffer.uri.clone(),
-                                        buffer.snapshot_version,
-                                    ),
-                                    content_changes,
-                                },
-                            )
-                            .log_err();
+                            server
+                                .lsp
+                                .notify::<request::DidChangeTextDocument>(
+                                    request::DidChangeTextDocumentParams {
+                                        uri: buffer.uri.clone().to_string(),
+                                        content: buffer.snapshot.text(),
+                                    },
+                                )
+                                .log_err();
                     }
                     let _ = done_tx.send((buffer.snapshot_version, buffer.snapshot.clone()));
                     Some(())
@@ -842,14 +839,10 @@ impl Cody {
                     let language_id = id_for_language(buffer.read(cx).language());
                     let snapshot = buffer.read(cx).snapshot();
                     server
-                        .notify::<lsp::notification::DidOpenTextDocument>(
-                            lsp::DidOpenTextDocumentParams {
-                                text_document: lsp::TextDocumentItem {
-                                    uri: uri.clone(),
-                                    language_id: language_id.clone(),
-                                    version: 0,
-                                    text: snapshot.text(),
-                                },
+                        .notify::<request::DidOpenTextDocument>(
+                            request::DidOpenTextDocumentParams {
+                                uri: uri.clone().to_string(),
+                                content: snapshot.text(),
                             },
                         )
                         .log_err();
@@ -1061,15 +1054,8 @@ impl Cody {
             let (version, snapshot) = snapshot.await?;
             let result = lsp
                 .request::<R>(request::GetCompletionsParams {
-                    doc: request::GetCompletionsDocument {
-                        uri,
-                        tab_size: tab_size.into(),
-                        indent_size: 1,
-                        insert_spaces: !hard_tabs,
-                        relative_path: relative_path.to_string_lossy().into(),
-                        position: point_to_lsp(position),
-                        version: version.try_into().unwrap(),
-                    },
+                    uri: uri.to_string(),
+                    position: point_to_lsp(position),
                 })
                 .await?;
             let completions = result
@@ -1081,9 +1067,9 @@ impl Cody {
                     let end =
                         snapshot.clip_point_utf16(point_from_lsp(completion.range.end), Bias::Left);
                     Completion {
-                        uuid: completion.uuid,
+                        uuid: completion.id,
                         range: snapshot.anchor_before(start)..snapshot.anchor_after(end),
-                        text: completion.text,
+                        text: completion.insert_text,
                     }
                 })
                 .collect();
