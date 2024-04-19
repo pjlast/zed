@@ -55,6 +55,10 @@ pub enum IconName {
     CopilotDisabled,
     CopilotError,
     CopilotInit,
+    Cody,
+    CodyDisabled,
+    CodyError,
+    CodyInit,
     Copy,
     Dash,
     Delete,
@@ -120,6 +124,7 @@ pub enum IconName {
     WholeWord,
     XCircle,
     ZedXCopilot,
+    ZedXCody,
 }
 
 impl IconName {
@@ -155,6 +160,10 @@ impl IconName {
             IconName::CopilotDisabled => "icons/copilot_disabled.svg",
             IconName::CopilotError => "icons/copilot_error.svg",
             IconName::CopilotInit => "icons/copilot_init.svg",
+            IconName::Cody => "icons/cody.svg",
+            IconName::CodyDisabled => "icons/cody_disabled.svg",
+            IconName::CodyError => "icons/cody_error.svg",
+            IconName::CodyInit => "icons/cody_init.svg",
             IconName::Copy => "icons/copy.svg",
             IconName::Dash => "icons/dash.svg",
             IconName::Delete => "icons/delete.svg",
@@ -220,6 +229,7 @@ impl IconName {
             IconName::WholeWord => "icons/word_search.svg",
             IconName::XCircle => "icons/error.svg",
             IconName::ZedXCopilot => "icons/zed_x_copilot.svg",
+            IconName::ZedXCody => "icons/zed_x_cody.svg",
         }
     }
 }

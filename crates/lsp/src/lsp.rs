@@ -397,6 +397,16 @@ impl LanguageServer {
         self.code_action_kinds.clone()
     }
 
+    pub fn set_name(mut self, name: String) -> LanguageServer {
+        self.name = name.into();
+        self
+    }
+
+    pub fn set_capabilities(mut self, capabilities: ServerCapabilities) -> LanguageServer {
+        self.capabilities = capabilities;
+        self
+    }
+
     async fn handle_input<Stdout, F>(
         stdout: Stdout,
         mut on_unhandled_notification: F,

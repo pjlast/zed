@@ -249,6 +249,7 @@ fn init_ui(args: Args) {
         let mut languages =
             LanguageRegistry::new(login_shell_env_loaded, cx.background_executor().clone());
         let copilot_language_server_id = languages.next_language_server_id();
+        let cody_language_server_id = languages.next_language_server_id();
         languages.set_language_server_download_dir(paths::LANGUAGES_DIR.clone());
         let languages = Arc::new(languages);
         let node_runtime = RealNodeRuntime::new(http.clone());
@@ -271,6 +272,12 @@ fn init_ui(args: Args) {
         diagnostics::init(cx);
         copilot::init(
             copilot_language_server_id,
+            http.clone(),
+            node_runtime.clone(),
+            cx,
+        );
+        cody::init(
+            cody_language_server_id,
             http.clone(),
             node_runtime.clone(),
             cx,

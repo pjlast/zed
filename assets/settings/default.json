@@ -13,7 +13,9 @@
   // Features that can be globally enabled or disabled
   "features": {
     // Show Copilot icon in status bar
-    "copilot": true
+    "copilot": true,
+    // Show Cody icon in status bar
+    "cody": false
   },
   // The name of a font to use for rendering text in the editor
   "buffer_font_family": "Zed Mono",
@@ -116,6 +118,9 @@
   // Controls whether copilot provides suggestion immediately
   // or waits for a `copilot::Toggle`
   "show_copilot_suggestions": true,
+  // Controls whether cody provides suggestion immediately
+  // or waits for a `cody::Toggle`
+  "show_cody_suggestions": false,
   // Whether to show tabs and spaces in the editor.
   // This setting can take three values:
   //
@@ -419,6 +424,11 @@
   },
   "copilot": {
     // The set of glob patterns for which copilot should be disabled
+    // in any matching file.
+    "disabled_globs": [".env"]
+  },
+  "cody": {
+    // The set of glob patterns for which cody should be disabled
     // in any matching file.
     "disabled_globs": [".env"]
   },

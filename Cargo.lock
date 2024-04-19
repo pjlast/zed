@@ -2201,6 +2201,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "cody"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "async-std",
+ "async-tar",
+ "clock",
+ "collections",
+ "command_palette_hooks",
+ "fs",
+ "futures 0.3.28",
+ "gpui",
+ "language",
+ "lsp",
+ "node_runtime",
+ "parking_lot",
+ "release_channel",
+ "rpc",
+ "serde",
+ "serde_json",
+ "settings",
+ "smol",
+ "util",
+]
+
+[[package]]
+name = "cody_ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "client",
+ "cody",
+ "editor",
+ "fs",
+ "futures 0.3.28",
+ "gpui",
+ "indoc",
+ "language",
+ "lsp",
+ "menu",
+ "project",
+ "serde_json",
+ "settings",
+ "theme",
+ "ui",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
 name = "collab"
 version = "0.44.0"
 dependencies = [
@@ -4002,15 +4054,12 @@ dependencies = [
  "gpui",
  "lazy_static",
  "libc",
- "log",
  "notify",
  "parking_lot",
  "rope",
  "serde",
- "serde_derive",
  "serde_json",
  "smol",
- "sum_tree",
  "tempfile",
  "text",
  "time",
@@ -7329,6 +7378,7 @@ dependencies = [
  "async-trait",
  "client",
  "clock",
+ "cody",
  "collections",
  "copilot",
  "env_logger",
@@ -12543,6 +12593,8 @@ dependencies = [
  "cli",
  "client",
  "clock",
+ "cody",
+ "cody_ui",
  "collab_ui",
  "collections",
  "command_palette",

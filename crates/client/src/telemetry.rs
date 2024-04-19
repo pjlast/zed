@@ -14,7 +14,7 @@ use std::io::Write;
 use std::{env, mem, path::PathBuf, sync::Arc, time::Duration};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
 use telemetry_events::{
-    ActionEvent, AppEvent, AssistantEvent, AssistantKind, CallEvent, CopilotEvent, CpuEvent,
+    ActionEvent, AppEvent, AssistantEvent, AssistantKind, CallEvent, CodyEvent, CopilotEvent, CpuEvent,
     EditEvent, EditorEvent, Event, EventRequestBody, EventWrapper, ExtensionEvent, MemoryEvent,
     SettingEvent,
 };
@@ -250,6 +250,21 @@ impl Telemetry {
         file_extension: Option<String>,
     ) {
         let event = Event::Copilot(CopilotEvent {
+            suggestion_id,
+            suggestion_accepted,
+            file_extension,
+        });
+
+        self.report_event(event)
+    }
+
+    pub fn report_cody_event(
+        self: &Arc<Self>,
+        suggestion_id: Option<String>,
+        suggestion_accepted: bool,
+        file_extension: Option<String>,
+    ) {
+        let event = Event::Cody(CodyEvent {
             suggestion_id,
             suggestion_accepted,
             file_extension,
