@@ -13,7 +13,7 @@
   // Features that can be globally enabled or disabled
   "features": {
     // Show Copilot icon in status bar
-    "copilot": true
+    "copilot": true,
     // Show Cody icon in status bar
     "cody": false
   },
