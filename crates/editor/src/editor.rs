@@ -45,7 +45,6 @@ use anyhow::{anyhow, Context as _, Result};
 use blink_manager::BlinkManager;
 use client::{Collaborator, ParticipantIndex};
 use clock::ReplicaId;
-use cody::Cody;
 use collections::{hash_map, BTreeMap, Bound, HashMap, HashSet, VecDeque};
 use convert_case::{Case, Casing};
 use debounced_delay::DebouncedDelay;
@@ -2656,16 +2655,6 @@ impl Editor {
                 this.trigger_completion_on_input(&text, cx);
                 this.refresh_inline_completion(true, cx);
             }
-
-            if had_active_cody_suggestion {
-                this.refresh_cody_suggestions(true, cx);
-                if !this.has_active_cody_suggestion(cx) {
-                    this.trigger_completion_on_input(&text, cx);
-                }
-            } else {
-                this.trigger_completion_on_input(&text, cx);
-                this.refresh_cody_suggestions(true, cx);
-            }
         });
     }
 
@@ -4008,15 +3997,6 @@ impl Editor {
         self.update_visible_inline_completion(cx);
     }
 
-    fn cody_suggest(&mut self, _: &cody::Suggest, cx: &mut ViewContext<Self>) {
-        if !self.has_active_cody_suggestion(cx) {
-            self.refresh_cody_suggestions(false, cx);
-            return;
-        }
-
-        self.update_visible_copilot_suggestion(cx);
-    }
-
     pub fn display_cursor_names(&mut self, _: &DisplayCursorNames, cx: &mut ViewContext<Self>) {
         self.show_cursor_names(cx);
     }
@@ -4189,14 +4169,6 @@ impl Editor {
 
     fn inline_completion_provider(&self) -> Option<Arc<dyn InlineCompletionProviderHandle>> {
         Some(self.inline_completion_provider.as_ref()?.provider.clone())
-    }
-
-    fn clear_cody_suggestions(&mut self, cx: &mut ViewContext<Self>) {
-        if let Some(old_suggestion) = self.cody_state.suggestion.take() {
-            self.splice_inlays(vec![old_suggestion.id], Vec::new(), cx);
-        }
-        self.cody_state = CodyState::default();
-        self.discard_cody_suggestion(cx);
     }
 
     pub fn render_code_actions_indicator(
@@ -9517,9 +9489,6 @@ impl Editor {
                 self.refresh_code_actions(cx);
                 if self.has_active_inline_completion(cx) {
                     self.update_visible_inline_completion(cx);
-                }
-                if self.has_active_cody_suggestion(cx) {
-                    self.update_visible_cody_suggestion(cx);
                 }
                 cx.emit(EditorEvent::BufferEdited);
                 cx.emit(SearchEvent::MatchesInvalidated);
