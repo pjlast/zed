@@ -176,7 +176,6 @@ fn main() {
         //     node_runtime.clone(),
         //     cx,
         // );
-        println!("{}", cody_language_server_id);
         cody::init(
             cody_language_server_id,
             http.clone(),

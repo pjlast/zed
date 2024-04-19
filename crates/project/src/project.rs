@@ -2531,7 +2531,6 @@ impl Project {
                         snapshot: next_snapshot.clone(),
                     });
 
-                    println!("{}", language_server.name());
                     language_server
                         .notify::<lsp::notification::DidChangeTextDocument>(
                             lsp::DidChangeTextDocumentParams {
@@ -9423,12 +9422,8 @@ fn subscribe_for_cody_events(
                                     },
                                 );
                             project.supplementary_language_servers.insert(new_server_id, (name.clone(), Arc::clone(cody_server)));
-                            if let LanguageServerName(nm) = name {
-                            println!("{}, {:?}", nm, cody_server);
-                            };
                             project.cody_log_subscription = Some(cody_log_subscription);
                             cx.emit(Event::LanguageServerAdded(new_server_id));
-                            println!("Language server added");
                         }
                     }
                     None => debug_panic!("Received Cody language server started event, but no language server is running"),

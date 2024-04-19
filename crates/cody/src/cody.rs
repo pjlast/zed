@@ -240,15 +240,15 @@ impl RegisteredBuffer {
                     if !content_changes.is_empty() {
                         buffer.snapshot_version += 1;
                         buffer.snapshot = new_snapshot;
-                            server
-                                .lsp
-                                .notify::<request::DidChangeTextDocument>(
-                                    request::DidChangeTextDocumentParams {
-                                        uri: buffer.uri.clone().to_string(),
-                                        content: buffer.snapshot.text(),
-                                    },
-                                )
-                                .log_err();
+                        server
+                            .lsp
+                            .notify::<request::DidChangeTextDocument>(
+                                request::DidChangeTextDocumentParams {
+                                    uri: buffer.uri.clone().to_string(),
+                                    content: buffer.snapshot.text(),
+                                },
+                            )
+                            .log_err();
                     }
                     let _ = done_tx.send((buffer.snapshot_version, buffer.snapshot.clone()));
                     Some(())
@@ -660,7 +660,6 @@ impl Cody {
                 ))
             };
 
-            println!("Start language server");
             let server = start_language_server.await;
             this.update(&mut cx, |this, cx| {
                 cx.notify();
@@ -674,7 +673,6 @@ impl Cody {
                         });
                         cx.emit(Event::CodyLanguageServerStarted);
                         this.update_sign_in_status(status, cx);
-                        println!("Sign in status updated");
                     }
                     Err(error) => {
                         this.server = CodyServer::Error(error.to_string().into());
@@ -683,7 +681,6 @@ impl Cody {
                 }
             })
             .ok();
-            println!("Done!");
         }
     }
 
@@ -1106,7 +1103,6 @@ impl Cody {
                 | request::SignInStatus::MaybeOk { .. }
                 | request::SignInStatus::AlreadySignedIn { .. } => {
                     server.sign_in_status = SignInStatus::Authorized;
-                    println!("Sign in status: Authorized");
                     for buffer in self.buffers.iter().cloned().collect::<Vec<_>>() {
                         if let Some(buffer) = buffer.upgrade() {
                             self.register_buffer(&buffer, cx);
