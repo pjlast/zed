@@ -12,6 +12,8 @@ members = [
     "crates/cli",
     "crates/client",
     "crates/clock",
+    "crates/cody",
+    "crates/cody_ui",
     "crates/collab",
     "crates/collab_ui",
     "crates/collections",
@@ -146,6 +148,7 @@ cli = { path = "crates/cli" }
 client = { path = "crates/client" }
 clock = { path = "crates/clock" }
 cody = { path = "crates/cody" }
+cody_ui = { path = "crates/cody_ui" }
 collab = { path = "crates/collab" }
 collab_ui = { path = "crates/collab_ui" }
 collections = { path = "crates/collections" }

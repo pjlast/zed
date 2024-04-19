@@ -51,6 +51,8 @@ pub fn all_language_settings<'a>(
 pub struct AllLanguageSettings {
     /// The settings for GitHub Copilot.
     pub copilot: CopilotSettings,
+    /// The settings for Sourcegraph Cody.
+    pub cody: CodySettings,
     defaults: LanguageSettings,
     languages: HashMap<Arc<str>, LanguageSettings>,
     pub(crate) file_types: HashMap<Arc<str>, Vec<String>>,
@@ -95,6 +97,9 @@ pub struct LanguageSettings {
     /// Controls whether Copilot provides suggestion immediately (true)
     /// or waits for a `copilot::Toggle` (false).
     pub show_copilot_suggestions: bool,
+    /// Controls whether Cody provides suggestion immediately (true)
+    /// or waits for a `cody::Toggle` (false).
+    pub show_cody_suggestions: bool,
     /// Whether to show tabs and spaces in the editor.
     pub show_whitespaces: ShowWhitespaceSetting,
     /// Whether to start a new line with a comment when a previous line is a comment as well.
@@ -118,6 +123,15 @@ pub struct CopilotSettings {
     pub disabled_globs: Vec<GlobMatcher>,
 }
 
+/// The settings for [Sourcegraph Cody](https://sourcegraph.com/cody).
+#[derive(Clone, Debug, Default)]
+pub struct CodySettings {
+    /// Whether Cody is enabled.
+    pub feature_enabled: bool,
+    /// A list of globs representing files that Cody should be disabled for.
+    pub disabled_globs: Vec<GlobMatcher>,
+}
+
 /// The settings for all languages.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AllLanguageSettingsContent {
@@ -127,6 +141,9 @@ pub struct AllLanguageSettingsContent {
     /// The settings for GitHub Copilot.
     #[serde(default)]
     pub copilot: Option<CopilotSettingsContent>,
+    /// The settings for Sourcegraph Cody.
+    #[serde(default)]
+    pub cody: Option<CodySettingsContent>,
     /// The default language settings.
     #[serde(flatten)]
     pub defaults: LanguageSettingsContent,
@@ -217,6 +234,12 @@ pub struct LanguageSettingsContent {
     /// Default: true
     #[serde(default)]
     pub show_copilot_suggestions: Option<bool>,
+    /// Controls whether Cody provides suggestion immediately (true)
+    /// or waits for a `cody::Toggle` (false).
+    ///
+    /// Default: true
+    #[serde(default)]
+    pub show_cody_suggestions: Option<bool>,
     /// Whether to show tabs and spaces in the editor.
     #[serde(default)]
     pub show_whitespaces: Option<ShowWhitespaceSetting>,
@@ -262,6 +285,15 @@ pub struct CopilotSettingsContent {
 pub struct FeaturesContent {
     /// Whether the GitHub Copilot feature is enabled.
     pub copilot: Option<bool>,
+    pub cody: Option<bool>,
+}
+
+/// The contents of the Sourcegraph Cody settings.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CodySettingsContent {
+    /// A list of globs representing files that Cody should be disabled for.
+    #[serde(default)]
+    pub disabled_globs: Option<Vec<String>>,
 }
 
 /// Controls the soft-wrapping behavior in the editor.
@@ -435,6 +467,31 @@ impl AllLanguageSettings {
         self.language(language.map(|l| l.name()).as_deref())
             .show_copilot_suggestions
     }
+
+    /// Returns whether Sourcegraph Cody is enabled for the given path.
+    pub fn cody_enabled_for_path(&self, path: &Path) -> bool {
+        !self
+            .cody
+            .disabled_globs
+            .iter()
+            .any(|glob| glob.is_match(path))
+    }
+
+    /// Returns whether Sourcegraph Cody is enabled for the given language and path.
+    pub fn cody_enabled(&self, language: Option<&Arc<Language>>, path: Option<&Path>) -> bool {
+        if !self.cody.feature_enabled {
+            return false;
+        }
+
+        if let Some(path) = path {
+            if !self.cody_enabled_for_path(path) {
+                return false;
+            }
+        }
+
+        self.language(language.map(|l| l.name()).as_deref())
+            .show_cody_suggestions
+    }
 }
 
 /// The kind of an inlay hint.
@@ -498,6 +555,17 @@ impl settings::Settings for AllLanguageSettings {
             .and_then(|c| c.disabled_globs.as_ref())
             .ok_or_else(Self::missing_default)?;
 
+        let mut cody_enabled = default_value
+            .features
+            .as_ref()
+            .and_then(|f| f.cody)
+            .ok_or_else(Self::missing_default)?;
+        let mut cody_globs = default_value
+            .cody
+            .as_ref()
+            .and_then(|c| c.disabled_globs.as_ref())
+            .ok_or_else(Self::missing_default)?;
+
         let mut file_types: HashMap<Arc<str>, Vec<String>> = HashMap::default();
         for user_settings in sources.customizations() {
             if let Some(copilot) = user_settings.features.as_ref().and_then(|f| f.copilot) {
@@ -509,6 +577,16 @@ impl settings::Settings for AllLanguageSettings {
                 .and_then(|f| f.disabled_globs.as_ref())
             {
                 copilot_globs = globs;
+            }
+            if let Some(cody) = user_settings.features.as_ref().and_then(|f| f.cody) {
+                cody_enabled = cody;
+            }
+            if let Some(globs) = user_settings
+                .cody
+                .as_ref()
+                .and_then(|f| f.disabled_globs.as_ref())
+            {
+                cody_globs = globs;
             }
 
             // A user's global settings override the default global settings and
@@ -540,6 +618,13 @@ impl settings::Settings for AllLanguageSettings {
             copilot: CopilotSettings {
                 feature_enabled: copilot_enabled,
                 disabled_globs: copilot_globs
+                    .iter()
+                    .filter_map(|g| Some(globset::Glob::new(g).ok()?.compile_matcher()))
+                    .collect(),
+            },
+            cody: CodySettings {
+                feature_enabled: cody_enabled,
+                disabled_globs: cody_globs
                     .iter()
                     .filter_map(|g| Some(globset::Glob::new(g).ok()?.compile_matcher()))
                     .collect(),
