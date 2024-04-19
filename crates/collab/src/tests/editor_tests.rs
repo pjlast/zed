@@ -3,6 +3,7 @@ use crate::{
     tests::{rust_lang, TestServer},
 };
 use call::ActiveCall;
+use collections::HashMap;
 use editor::{
     actions::{
         ConfirmCodeAction, ConfirmCompletion, ConfirmRename, Redo, Rename, RevertSelectedHunks,
@@ -12,17 +13,21 @@ use editor::{
     Editor,
 };
 use futures::StreamExt;
-use gpui::{TestAppContext, VisualContext, VisualTestContext};
+use gpui::{BorrowAppContext, TestAppContext, VisualContext, VisualTestContext};
 use indoc::indoc;
 use language::{
     language_settings::{AllLanguageSettings, InlayHintSettings},
     FakeLspAdapter,
 };
-use project::SERVER_PROGRESS_DEBOUNCE_TIMEOUT;
+use project::{
+    project_settings::{InlineBlameSettings, ProjectSettings},
+    SERVER_PROGRESS_DEBOUNCE_TIMEOUT,
+};
 use rpc::RECEIVE_TIMEOUT;
 use serde_json::json;
 use settings::SettingsStore;
 use std::{
+    ops::Range,
     path::Path,
     sync::{
         atomic::{self, AtomicBool, AtomicUsize},
@@ -731,8 +736,56 @@ async fn test_collaborating_with_renames(cx_a: &mut TestAppContext, cx_b: &mut T
             6..9
         );
         rename.editor.update(cx, |rename_editor, cx| {
+            let rename_selection = rename_editor.selections.newest::<usize>(cx);
+            assert_eq!(
+                rename_selection.range(),
+                0..3,
+                "Rename that was triggered from zero selection caret, should propose the whole word."
+            );
             rename_editor.buffer().update(cx, |rename_buffer, cx| {
                 rename_buffer.edit([(0..3, "THREE")], None, cx);
+            });
+        });
+    });
+
+    // Cancel the rename, and repeat the same, but use selections instead of cursor movement
+    editor_b.update(cx_b, |editor, cx| {
+        editor.cancel(&editor::actions::Cancel, cx);
+    });
+    let prepare_rename = editor_b.update(cx_b, |editor, cx| {
+        editor.change_selections(None, cx, |s| s.select_ranges([7..8]));
+        editor.rename(&Rename, cx).unwrap()
+    });
+
+    fake_language_server
+        .handle_request::<lsp::request::PrepareRenameRequest, _, _>(|params, _| async move {
+            assert_eq!(params.text_document.uri.as_str(), "file:///dir/one.rs");
+            assert_eq!(params.position, lsp::Position::new(0, 8));
+            Ok(Some(lsp::PrepareRenameResponse::Range(lsp::Range::new(
+                lsp::Position::new(0, 6),
+                lsp::Position::new(0, 9),
+            ))))
+        })
+        .next()
+        .await
+        .unwrap();
+    prepare_rename.await.unwrap();
+    editor_b.update(cx_b, |editor, cx| {
+        use editor::ToOffset;
+        let rename = editor.pending_rename().unwrap();
+        let buffer = editor.buffer().read(cx).snapshot(cx);
+        let lsp_rename_start = rename.range.start.to_offset(&buffer);
+        let lsp_rename_end = rename.range.end.to_offset(&buffer);
+        assert_eq!(lsp_rename_start..lsp_rename_end, 6..9);
+        rename.editor.update(cx, |rename_editor, cx| {
+            let rename_selection = rename_editor.selections.newest::<usize>(cx);
+            assert_eq!(
+                rename_selection.range(),
+                1..2,
+                "Rename that was triggered from a selection, should have the same selection range in the rename proposal"
+            );
+            rename_editor.buffer().update(cx, |rename_buffer, cx| {
+                rename_buffer.edit([(0..lsp_rename_end - lsp_rename_start, "THREE")], None, cx);
             });
         });
     });
@@ -1986,6 +2039,198 @@ struct Row10;"#};
         struct Row1220;"#});
 }
 
+#[gpui::test(iterations = 10)]
+async fn test_git_blame_is_forwarded(cx_a: &mut TestAppContext, cx_b: &mut TestAppContext) {
+    let mut server = TestServer::start(cx_a.executor()).await;
+    let client_a = server.create_client(cx_a, "user_a").await;
+    let client_b = server.create_client(cx_b, "user_b").await;
+    server
+        .create_room(&mut [(&client_a, cx_a), (&client_b, cx_b)])
+        .await;
+    let active_call_a = cx_a.read(ActiveCall::global);
+
+    cx_a.update(editor::init);
+    cx_b.update(editor::init);
+    // Turn inline-blame-off by default so no state is transferred without us explicitly doing so
+    let inline_blame_off_settings = Some(InlineBlameSettings {
+        enabled: false,
+        delay_ms: None,
+        min_column: None,
+    });
+    cx_a.update(|cx| {
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings::<ProjectSettings>(cx, |settings| {
+                settings.git.inline_blame = inline_blame_off_settings;
+            });
+        });
+    });
+    cx_b.update(|cx| {
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings::<ProjectSettings>(cx, |settings| {
+                settings.git.inline_blame = inline_blame_off_settings;
+            });
+        });
+    });
+
+    client_a
+        .fs()
+        .insert_tree(
+            "/my-repo",
+            json!({
+                ".git": {},
+                "file.txt": "line1\nline2\nline3\nline\n",
+            }),
+        )
+        .await;
+
+    let blame = git::blame::Blame {
+        entries: vec![
+            blame_entry("1b1b1b", 0..1),
+            blame_entry("0d0d0d", 1..2),
+            blame_entry("3a3a3a", 2..3),
+            blame_entry("4c4c4c", 3..4),
+        ],
+        permalinks: HashMap::default(), // This field is deprecrated
+        messages: [
+            ("1b1b1b", "message for idx-0"),
+            ("0d0d0d", "message for idx-1"),
+            ("3a3a3a", "message for idx-2"),
+            ("4c4c4c", "message for idx-3"),
+        ]
+        .into_iter()
+        .map(|(sha, message)| (sha.parse().unwrap(), message.into()))
+        .collect(),
+        remote_url: Some("git@github.com:zed-industries/zed.git".to_string()),
+    };
+    client_a.fs().set_blame_for_repo(
+        Path::new("/my-repo/.git"),
+        vec![(Path::new("file.txt"), blame)],
+    );
+
+    let (project_a, worktree_id) = client_a.build_local_project("/my-repo", cx_a).await;
+    let project_id = active_call_a
+        .update(cx_a, |call, cx| call.share_project(project_a.clone(), cx))
+        .await
+        .unwrap();
+
+    // Create editor_a
+    let (workspace_a, cx_a) = client_a.build_workspace(&project_a, cx_a);
+    let editor_a = workspace_a
+        .update(cx_a, |workspace, cx| {
+            workspace.open_path((worktree_id, "file.txt"), None, true, cx)
+        })
+        .await
+        .unwrap()
+        .downcast::<Editor>()
+        .unwrap();
+
+    // Join the project as client B.
+    let project_b = client_b.build_remote_project(project_id, cx_b).await;
+    let (workspace_b, cx_b) = client_b.build_workspace(&project_b, cx_b);
+    let editor_b = workspace_b
+        .update(cx_b, |workspace, cx| {
+            workspace.open_path((worktree_id, "file.txt"), None, true, cx)
+        })
+        .await
+        .unwrap()
+        .downcast::<Editor>()
+        .unwrap();
+
+    // client_b now requests git blame for the open buffer
+    editor_b.update(cx_b, |editor_b, cx| {
+        assert!(editor_b.blame().is_none());
+        editor_b.toggle_git_blame(&editor::actions::ToggleGitBlame {}, cx);
+    });
+
+    cx_a.executor().run_until_parked();
+    cx_b.executor().run_until_parked();
+
+    editor_b.update(cx_b, |editor_b, cx| {
+        let blame = editor_b.blame().expect("editor_b should have blame now");
+        let entries = blame.update(cx, |blame, cx| {
+            blame
+                .blame_for_rows((0..4).map(Some), cx)
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            entries,
+            vec![
+                Some(blame_entry("1b1b1b", 0..1)),
+                Some(blame_entry("0d0d0d", 1..2)),
+                Some(blame_entry("3a3a3a", 2..3)),
+                Some(blame_entry("4c4c4c", 3..4)),
+            ]
+        );
+
+        blame.update(cx, |blame, _| {
+            for (idx, entry) in entries.iter().flatten().enumerate() {
+                let details = blame.details_for_entry(entry).unwrap();
+                assert_eq!(details.message, format!("message for idx-{}", idx));
+                assert_eq!(
+                    details.permalink.unwrap().to_string(),
+                    format!("https://github.com/zed-industries/zed/commit/{}", entry.sha)
+                );
+            }
+        });
+    });
+
+    // editor_b updates the file, which gets sent to client_a, which updates git blame,
+    // which gets back to client_b.
+    editor_b.update(cx_b, |editor_b, cx| {
+        editor_b.edit([(Point::new(0, 3)..Point::new(0, 3), "FOO")], cx);
+    });
+
+    cx_a.executor().run_until_parked();
+    cx_b.executor().run_until_parked();
+
+    editor_b.update(cx_b, |editor_b, cx| {
+        let blame = editor_b.blame().expect("editor_b should have blame now");
+        let entries = blame.update(cx, |blame, cx| {
+            blame
+                .blame_for_rows((0..4).map(Some), cx)
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            entries,
+            vec![
+                None,
+                Some(blame_entry("0d0d0d", 1..2)),
+                Some(blame_entry("3a3a3a", 2..3)),
+                Some(blame_entry("4c4c4c", 3..4)),
+            ]
+        );
+    });
+
+    // Now editor_a also updates the file
+    editor_a.update(cx_a, |editor_a, cx| {
+        editor_a.edit([(Point::new(1, 3)..Point::new(1, 3), "FOO")], cx);
+    });
+
+    cx_a.executor().run_until_parked();
+    cx_b.executor().run_until_parked();
+
+    editor_b.update(cx_b, |editor_b, cx| {
+        let blame = editor_b.blame().expect("editor_b should have blame now");
+        let entries = blame.update(cx, |blame, cx| {
+            blame
+                .blame_for_rows((0..4).map(Some), cx)
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            entries,
+            vec![
+                None,
+                None,
+                Some(blame_entry("3a3a3a", 2..3)),
+                Some(blame_entry("4c4c4c", 3..4)),
+            ]
+        );
+    });
+}
+
 fn extract_hint_labels(editor: &Editor) -> Vec<String> {
     let mut labels = Vec::new();
     for hint in editor.inlay_hint_cache().hints() {
@@ -1995,4 +2240,12 @@ fn extract_hint_labels(editor: &Editor) -> Vec<String> {
         }
     }
     labels
+}
+
+fn blame_entry(sha: &str, range: Range<u32>) -> git::blame::BlameEntry {
+    git::blame::BlameEntry {
+        sha: sha.parse().unwrap(),
+        range,
+        ..Default::default()
+    }
 }

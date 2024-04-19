@@ -6,7 +6,7 @@ use smol::channel::bounded;
 use std::path::{Path, PathBuf};
 use terminal::{
     terminal_settings::{self, Shell, TerminalSettings, VenvSettingsContent},
-    SpawnTask, TaskState, Terminal, TerminalBuilder,
+    SpawnTask, TaskState, TaskStatus, Terminal, TerminalBuilder,
 };
 use util::ResultExt;
 
@@ -44,6 +44,7 @@ impl Project {
             .unwrap_or_else(|| Path::new(""));
 
         let (spawn_task, shell) = if let Some(spawn_task) = spawn_task {
+            log::debug!("Spawning task: {spawn_task:?}");
             env.extend(spawn_task.env);
             // Activate minimal Python virtual environment
             if let Some(python_settings) = &python_settings.as_option() {
@@ -52,8 +53,17 @@ impl Project {
             (
                 Some(TaskState {
                     id: spawn_task.id,
+                    full_label: spawn_task.full_label,
                     label: spawn_task.label,
-                    completed: false,
+                    command_label: spawn_task.args.iter().fold(
+                        spawn_task.command.clone(),
+                        |mut command_label, new_arg| {
+                            command_label.push(' ');
+                            command_label.push_str(new_arg);
+                            command_label
+                        },
+                    ),
+                    status: TaskStatus::Running,
                     completion_rx,
                 }),
                 Shell::WithArguments {

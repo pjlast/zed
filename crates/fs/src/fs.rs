@@ -1,5 +1,3 @@
-pub mod repository;
-
 use anyhow::{anyhow, Result};
 
 #[cfg(unix)]
@@ -7,9 +5,9 @@ use std::os::unix::fs::MetadataExt;
 
 use async_tar::Archive;
 use futures::{future::BoxFuture, AsyncRead, Stream, StreamExt};
+use git::repository::{GitRepository, RealGitRepository};
 use git2::Repository as LibGitRepository;
 use parking_lot::Mutex;
-use repository::GitRepository;
 use rope::Rope;
 #[cfg(any(test, feature = "test-support"))]
 use smol::io::AsyncReadExt;
@@ -29,7 +27,7 @@ use util::{paths, ResultExt};
 #[cfg(any(test, feature = "test-support"))]
 use collections::{btree_map, BTreeMap};
 #[cfg(any(test, feature = "test-support"))]
-use repository::{FakeGitRepositoryState, GitFileStatus};
+use git::repository::{FakeGitRepositoryState, GitFileStatus};
 #[cfg(any(test, feature = "test-support"))]
 use std::ffi::OsStr;
 
@@ -111,7 +109,16 @@ pub struct Metadata {
     pub is_dir: bool,
 }
 
-pub struct RealFs;
+#[derive(Default)]
+pub struct RealFs {
+    git_binary_path: Option<PathBuf>,
+}
+
+impl RealFs {
+    pub fn new(git_binary_path: Option<PathBuf>) -> Self {
+        Self { git_binary_path }
+    }
+}
 
 #[async_trait::async_trait]
 impl Fs for RealFs {
@@ -431,7 +438,10 @@ impl Fs for RealFs {
         LibGitRepository::open(dotgit_path)
             .log_err()
             .map::<Arc<Mutex<dyn GitRepository>>, _>(|libgit_repository| {
-                Arc::new(Mutex::new(libgit_repository))
+                Arc::new(Mutex::new(RealGitRepository::new(
+                    libgit_repository,
+                    self.git_binary_path.clone(),
+                )))
             })
     }
 
@@ -513,7 +523,7 @@ enum FakeFsEntry {
         inode: u64,
         mtime: SystemTime,
         entries: BTreeMap<String, Arc<Mutex<FakeFsEntry>>>,
-        git_repo_state: Option<Arc<Mutex<repository::FakeGitRepositoryState>>>,
+        git_repo_state: Option<Arc<Mutex<git::repository::FakeGitRepositoryState>>>,
     },
     Symlink {
         target: PathBuf,
@@ -820,6 +830,17 @@ impl FakeFs {
                 head_state
                     .iter()
                     .map(|(path, content)| (path.to_path_buf(), content.clone())),
+            );
+        });
+    }
+
+    pub fn set_blame_for_repo(&self, dot_git: &Path, blames: Vec<(&Path, git::blame::Blame)>) {
+        self.with_git_state(dot_git, true, |state| {
+            state.blames.clear();
+            state.blames.extend(
+                blames
+                    .into_iter()
+                    .map(|(path, blame)| (path.to_path_buf(), blame)),
             );
         });
     }
@@ -1394,7 +1415,7 @@ impl Fs for FakeFs {
             let state = git_repo_state
                 .get_or_insert_with(|| Arc::new(Mutex::new(FakeGitRepositoryState::default())))
                 .clone();
-            Some(repository::FakeGitRepository::open(state))
+            Some(git::repository::FakeGitRepository::open(state))
         } else {
             None
         }

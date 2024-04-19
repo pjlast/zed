@@ -16,7 +16,6 @@ collections.workspace = true
 rope.workspace = true
 text.workspace = true
 util.workspace = true
-sum_tree.workspace = true
 
 anyhow.workspace = true
 async-tar.workspace = true
@@ -26,11 +25,10 @@ tempfile.workspace = true
 lazy_static.workspace = true
 parking_lot.workspace = true
 smol.workspace = true
+git.workspace = true
 git2.workspace = true
 serde.workspace = true
-serde_derive.workspace = true
 serde_json.workspace = true
-log.workspace = true
 libc = "0.2"
 time.workspace = true
 
@@ -49,4 +47,4 @@ windows.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 
 [features]
-test-support = ["gpui/test-support"]
+test-support = ["gpui/test-support", "git/test-support"]

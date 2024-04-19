@@ -35,6 +35,7 @@ copilot.workspace = true
 fs.workspace = true
 futures.workspace = true
 fuzzy.workspace = true
+git.workspace = true
 globset.workspace = true
 gpui.workspace = true
 itertools.workspace = true

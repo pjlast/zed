@@ -1,11 +1,15 @@
 mod components;
 mod extension_suggest;
+mod extension_version_selector;
 
 use crate::components::ExtensionCard;
+use crate::extension_version_selector::{
+    ExtensionVersionSelector, ExtensionVersionSelectorDelegate,
+};
 use client::telemetry::Telemetry;
 use client::ExtensionMetadata;
 use editor::{Editor, EditorElement, EditorStyle};
-use extension::{ExtensionManifest, ExtensionStatus, ExtensionStore};
+use extension::{ExtensionManifest, ExtensionOperation, ExtensionStore};
 use fuzzy::{match_strings, StringMatchCandidate};
 use gpui::{
     actions, canvas, uniform_list, AnyElement, AppContext, EventEmitter, FocusableView, FontStyle,
@@ -17,8 +21,9 @@ use std::ops::DerefMut;
 use std::time::Duration;
 use std::{ops::Range, sync::Arc};
 use theme::ThemeSettings;
-use ui::{prelude::*, ToggleButton, Tooltip};
+use ui::{popover_menu, prelude::*, ContextMenu, ToggleButton, Tooltip};
 use util::ResultExt as _;
+use workspace::item::TabContentParams;
 use workspace::{
     item::{Item, ItemEvent},
     Workspace, WorkspaceId,
@@ -77,6 +82,15 @@ pub fn init(cx: &mut AppContext) {
     .detach();
 }
 
+#[derive(Clone)]
+pub enum ExtensionStatus {
+    NotInstalled,
+    Installing,
+    Upgrading,
+    Installed(Arc<str>),
+    Removing,
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 enum ExtensionFilter {
     All,
@@ -94,6 +108,7 @@ impl ExtensionFilter {
 }
 
 pub struct ExtensionsPage {
+    workspace: WeakView<Workspace>,
     list: UniformListScrollHandle,
     telemetry: Arc<Telemetry>,
     is_fetching_extensions: bool,
@@ -131,6 +146,7 @@ impl ExtensionsPage {
             cx.subscribe(&query_editor, Self::on_query_change).detach();
 
             let mut this = Self {
+                workspace: workspace.weak_handle(),
                 list: UniformListScrollHandle::new(),
                 telemetry: workspace.client().telemetry().clone(),
                 is_fetching_extensions: false,
@@ -174,9 +190,30 @@ impl ExtensionsPage {
         }
     }
 
-    fn filter_extension_entries(&mut self, cx: &mut ViewContext<Self>) {
+    /// Returns whether a dev extension currently exists for the extension with the given ID.
+    fn dev_extension_exists(extension_id: &str, cx: &mut ViewContext<Self>) -> bool {
         let extension_store = ExtensionStore::global(cx).read(cx);
 
+        extension_store
+            .dev_extensions()
+            .any(|dev_extension| dev_extension.id.as_ref() == extension_id)
+    }
+
+    fn extension_status(extension_id: &str, cx: &mut ViewContext<Self>) -> ExtensionStatus {
+        let extension_store = ExtensionStore::global(cx).read(cx);
+
+        match extension_store.outstanding_operations().get(extension_id) {
+            Some(ExtensionOperation::Install) => ExtensionStatus::Installing,
+            Some(ExtensionOperation::Remove) => ExtensionStatus::Removing,
+            Some(ExtensionOperation::Upgrade) => ExtensionStatus::Upgrading,
+            None => match extension_store.installed_extensions().get(extension_id) {
+                Some(extension) => ExtensionStatus::Installed(extension.manifest.version.clone()),
+                None => ExtensionStatus::NotInstalled,
+            },
+        }
+    }
+
+    fn filter_extension_entries(&mut self, cx: &mut ViewContext<Self>) {
         self.filtered_remote_extension_indices.clear();
         self.filtered_remote_extension_indices.extend(
             self.remote_extension_entries
@@ -185,11 +222,11 @@ impl ExtensionsPage {
                 .filter(|(_, extension)| match self.filter {
                     ExtensionFilter::All => true,
                     ExtensionFilter::Installed => {
-                        let status = extension_store.extension_status(&extension.id);
+                        let status = Self::extension_status(&extension.id, cx);
                         matches!(status, ExtensionStatus::Installed(_))
                     }
                     ExtensionFilter::NotInstalled => {
-                        let status = extension_store.extension_status(&extension.id);
+                        let status = Self::extension_status(&extension.id, cx);
 
                         matches!(status, ExtensionStatus::NotInstalled)
                     }
@@ -285,9 +322,7 @@ impl ExtensionsPage {
         extension: &ExtensionManifest,
         cx: &mut ViewContext<Self>,
     ) -> ExtensionCard {
-        let status = ExtensionStore::global(cx)
-            .read(cx)
-            .extension_status(&extension.id);
+        let status = Self::extension_status(&extension.id, cx);
 
         let repository_url = extension.repository.clone();
 
@@ -389,15 +424,23 @@ impl ExtensionsPage {
         extension: &ExtensionMetadata,
         cx: &mut ViewContext<Self>,
     ) -> ExtensionCard {
-        let status = ExtensionStore::global(cx)
-            .read(cx)
-            .extension_status(&extension.id);
+        let this = cx.view().clone();
+        let status = Self::extension_status(&extension.id, cx);
+        let has_dev_extension = Self::dev_extension_exists(&extension.id, cx);
 
+        let extension_id = extension.id.clone();
         let (install_or_uninstall_button, upgrade_button) =
-            self.buttons_for_entry(extension, &status, cx);
+            self.buttons_for_entry(extension, &status, has_dev_extension, cx);
+        let version = extension.manifest.version.clone();
         let repository_url = extension.manifest.repository.clone();
 
+        let installed_version = match status {
+            ExtensionStatus::Installed(installed_version) => Some(installed_version),
+            _ => None,
+        };
+
         ExtensionCard::new()
+            .overridden_by_dev_extension(has_dev_extension)
             .child(
                 h_flex()
                     .justify_between()
@@ -409,9 +452,14 @@ impl ExtensionsPage {
                                 Headline::new(extension.manifest.name.clone())
                                     .size(HeadlineSize::Medium),
                             )
-                            .child(
-                                Headline::new(format!("v{}", extension.manifest.version))
-                                    .size(HeadlineSize::XSmall),
+                            .child(Headline::new(format!("v{version}")).size(HeadlineSize::XSmall))
+                            .children(
+                                installed_version
+                                    .filter(|installed_version| *installed_version != version)
+                                    .map(|installed_version| {
+                                        Headline::new(format!("(v{installed_version} installed)",))
+                                            .size(HeadlineSize::XSmall)
+                                    }),
                             ),
                     )
                     .child(
@@ -454,41 +502,127 @@ impl ExtensionsPage {
                         )
                     }))
                     .child(
-                        IconButton::new(
-                            SharedString::from(format!("repository-{}", extension.id)),
-                            IconName::Github,
-                        )
-                        .icon_color(Color::Accent)
-                        .icon_size(IconSize::Small)
-                        .style(ButtonStyle::Filled)
-                        .on_click(cx.listener({
-                            let repository_url = repository_url.clone();
-                            move |_, _, cx| {
-                                cx.open_url(&repository_url);
-                            }
-                        }))
-                        .tooltip(move |cx| Tooltip::text(repository_url.clone(), cx)),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!("repository-{}", extension.id)),
+                                    IconName::Github,
+                                )
+                                .icon_color(Color::Accent)
+                                .icon_size(IconSize::Small)
+                                .style(ButtonStyle::Filled)
+                                .on_click(cx.listener({
+                                    let repository_url = repository_url.clone();
+                                    move |_, _, cx| {
+                                        cx.open_url(&repository_url);
+                                    }
+                                }))
+                                .tooltip(move |cx| Tooltip::text(repository_url.clone(), cx)),
+                            )
+                            .child(
+                                popover_menu(SharedString::from(format!("more-{}", extension.id)))
+                                    .trigger(
+                                        IconButton::new(
+                                            SharedString::from(format!("more-{}", extension.id)),
+                                            IconName::Ellipsis,
+                                        )
+                                        .icon_color(Color::Accent)
+                                        .icon_size(IconSize::Small)
+                                        .style(ButtonStyle::Filled),
+                                    )
+                                    .menu(move |cx| {
+                                        Some(Self::render_remote_extension_context_menu(
+                                            &this,
+                                            extension_id.clone(),
+                                            cx,
+                                        ))
+                                    }),
+                            ),
                     ),
             )
+    }
+
+    fn render_remote_extension_context_menu(
+        this: &View<Self>,
+        extension_id: Arc<str>,
+        cx: &mut WindowContext,
+    ) -> View<ContextMenu> {
+        let context_menu = ContextMenu::build(cx, |context_menu, cx| {
+            context_menu.entry(
+                "Install Another Version...",
+                None,
+                cx.handler_for(&this, move |this, cx| {
+                    this.show_extension_version_list(extension_id.clone(), cx)
+                }),
+            )
+        });
+
+        context_menu
+    }
+
+    fn show_extension_version_list(&mut self, extension_id: Arc<str>, cx: &mut ViewContext<Self>) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+
+        cx.spawn(move |this, mut cx| async move {
+            let extension_versions_task = this.update(&mut cx, |_, cx| {
+                let extension_store = ExtensionStore::global(cx);
+
+                extension_store.update(cx, |store, cx| {
+                    store.fetch_extension_versions(&extension_id, cx)
+                })
+            })?;
+
+            let extension_versions = extension_versions_task.await?;
+
+            workspace.update(&mut cx, |workspace, cx| {
+                let fs = workspace.project().read(cx).fs().clone();
+                workspace.toggle_modal(cx, |cx| {
+                    let delegate = ExtensionVersionSelectorDelegate::new(
+                        fs,
+                        cx.view().downgrade(),
+                        extension_versions,
+                    );
+
+                    ExtensionVersionSelector::new(delegate, cx)
+                });
+            })?;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
     }
 
     fn buttons_for_entry(
         &self,
         extension: &ExtensionMetadata,
         status: &ExtensionStatus,
+        has_dev_extension: bool,
         cx: &mut ViewContext<Self>,
     ) -> (Button, Option<Button>) {
+        let is_compatible = extension::is_version_compatible(&extension);
+
+        if has_dev_extension {
+            // If we have a dev extension for the given extension, just treat it as uninstalled.
+            // The button here is a placeholder, as it won't be interactable anyways.
+            return (
+                Button::new(SharedString::from(extension.id.clone()), "Install"),
+                None,
+            );
+        }
+
         match status.clone() {
             ExtensionStatus::NotInstalled => (
                 Button::new(SharedString::from(extension.id.clone()), "Install").on_click(
                     cx.listener({
                         let extension_id = extension.id.clone();
-                        let version = extension.manifest.version.clone();
                         move |this, _, cx| {
                             this.telemetry
                                 .report_app_event("extensions: install extension".to_string());
                             ExtensionStore::global(cx).update(cx, |store, cx| {
-                                store.install_extension(extension_id.clone(), version.clone(), cx)
+                                store.install_latest_extension(extension_id.clone(), cx)
                             });
                         }
                     }),
@@ -522,8 +656,22 @@ impl ExtensionsPage {
                     None
                 } else {
                     Some(
-                        Button::new(SharedString::from(extension.id.clone()), "Upgrade").on_click(
-                            cx.listener({
+                        Button::new(SharedString::from(extension.id.clone()), "Upgrade")
+                            .when(!is_compatible, |upgrade_button| {
+                                upgrade_button.disabled(true).tooltip({
+                                    let version = extension.manifest.version.clone();
+                                    move |cx| {
+                                        Tooltip::text(
+                                            format!(
+                                                "v{version} is not compatible with this version of Zed.",
+                                            ),
+                                            cx,
+                                        )
+                                    }
+                                })
+                            })
+                            .disabled(!is_compatible)
+                            .on_click(cx.listener({
                                 let extension_id = extension.id.clone();
                                 let version = extension.manifest.version.clone();
                                 move |this, _, cx| {
@@ -531,15 +679,16 @@ impl ExtensionsPage {
                                         "extensions: install extension".to_string(),
                                     );
                                     ExtensionStore::global(cx).update(cx, |store, cx| {
-                                        store.upgrade_extension(
-                                            extension_id.clone(),
-                                            version.clone(),
-                                            cx,
-                                        )
+                                        store
+                                            .upgrade_extension(
+                                                extension_id.clone(),
+                                                version.clone(),
+                                                cx,
+                                            )
+                                            .detach_and_log_err(cx)
                                     });
                                 }
-                            }),
-                        ),
+                            })),
                     )
                 },
             ),
@@ -713,7 +862,7 @@ impl Render for ExtensionsPage {
                             .justify_between()
                             .child(Headline::new("Extensions").size(HeadlineSize::XLarge))
                             .child(
-                                Button::new("add-dev-extension", "Add Dev Extension")
+                                Button::new("install-dev-extension", "Install Dev Extension")
                                     .style(ButtonStyle::Filled)
                                     .size(ButtonSize::Large)
                                     .on_click(|_event, cx| {
@@ -821,9 +970,9 @@ impl FocusableView for ExtensionsPage {
 impl Item for ExtensionsPage {
     type Event = ItemEvent;
 
-    fn tab_content(&self, _: Option<usize>, selected: bool, _: &WindowContext) -> AnyElement {
+    fn tab_content(&self, params: TabContentParams, _: &WindowContext) -> AnyElement {
         Label::new("Extensions")
-            .color(if selected {
+            .color(if params.selected {
                 Color::Default
             } else {
                 Color::Muted

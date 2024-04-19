@@ -11,7 +11,10 @@ use lsp::Url;
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::{os, task::Poll};
+#[cfg(not(windows))]
+use std::os;
+use std::task::Poll;
+use task::{TaskContext, TaskSource, TaskTemplate, TaskTemplates};
 use unindent::Unindent as _;
 use util::{assert_set_eq, paths::PathMatcher, test::temp_tree};
 use worktree::WorktreeModelHandle as _;
@@ -75,7 +78,7 @@ async fn test_symlinks(cx: &mut gpui::TestAppContext) {
     )
     .unwrap();
 
-    let project = Project::test(Arc::new(RealFs), [root_link_path.as_ref()], cx).await;
+    let project = Project::test(Arc::new(RealFs::default()), [root_link_path.as_ref()], cx).await;
 
     project.update(cx, |project, cx| {
         let tree = project.worktrees().next().unwrap().read(cx);
@@ -123,8 +126,19 @@ async fn test_managing_project_specific_settings(cx: &mut gpui::TestAppContext) 
 
     let project = Project::test(fs.clone(), ["/the-root".as_ref()], cx).await;
     let worktree = project.update(cx, |project, _| project.worktrees().next().unwrap());
+    let task_context = TaskContext::default();
 
     cx.executor().run_until_parked();
+    let workree_id = cx.update(|cx| {
+        project.update(cx, |project, cx| {
+            project.worktrees().next().unwrap().read(cx).id()
+        })
+    });
+    let global_task_source_kind = TaskSourceKind::Worktree {
+        id: workree_id,
+        abs_path: PathBuf::from("/the-root/.zed/tasks.json"),
+        id_base: "local_tasks_for_worktree",
+    };
     cx.update(|cx| {
         let tree = worktree.read(cx);
 
@@ -152,17 +166,29 @@ async fn test_managing_project_specific_settings(cx: &mut gpui::TestAppContext) 
         assert_eq!(settings_a.tab_size.get(), 8);
         assert_eq!(settings_b.tab_size.get(), 2);
 
-        let workree_id = project.update(cx, |project, cx| {
-            project.worktrees().next().unwrap().read(cx).id()
-        });
         let all_tasks = project
             .update(cx, |project, cx| {
                 project.task_inventory().update(cx, |inventory, cx| {
-                    inventory.list_tasks(None, None, false, cx)
+                    let (mut old, new) = inventory.used_and_current_resolved_tasks(
+                        None,
+                        Some(workree_id),
+                        &task_context,
+                        cx,
+                    );
+                    old.extend(new);
+                    old
                 })
             })
             .into_iter()
-            .map(|(source_kind, task)| (source_kind, task.name().to_string()))
+            .map(|(source_kind, task)| {
+                let resolved = task.resolved.unwrap();
+                (
+                    source_kind,
+                    task.resolved_label,
+                    resolved.args,
+                    resolved.env,
+                )
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             all_tasks,
@@ -170,20 +196,139 @@ async fn test_managing_project_specific_settings(cx: &mut gpui::TestAppContext) 
                 (
                     TaskSourceKind::Worktree {
                         id: workree_id,
-                        abs_path: PathBuf::from("/the-root/.zed/tasks.json")
+                        abs_path: PathBuf::from("/the-root/b/.zed/tasks.json"),
+                        id_base: "local_tasks_for_worktree",
                     },
-                    "cargo check".to_string()
+                    "cargo check".to_string(),
+                    vec!["check".to_string()],
+                    HashMap::default(),
                 ),
                 (
-                    TaskSourceKind::Worktree {
-                        id: workree_id,
-                        abs_path: PathBuf::from("/the-root/b/.zed/tasks.json")
-                    },
-                    "cargo check".to_string()
+                    global_task_source_kind.clone(),
+                    "cargo check".to_string(),
+                    vec!["check".to_string(), "--all".to_string()],
+                    HashMap::default(),
                 ),
             ]
         );
     });
+
+    project.update(cx, |project, cx| {
+        let inventory = project.task_inventory();
+        inventory.update(cx, |inventory, cx| {
+            let (mut old, new) = inventory.used_and_current_resolved_tasks(
+                None,
+                Some(workree_id),
+                &task_context,
+                cx,
+            );
+            old.extend(new);
+            let (_, resolved_task) = old
+                .into_iter()
+                .find(|(source_kind, _)| source_kind == &global_task_source_kind)
+                .expect("should have one global task");
+            inventory.task_scheduled(global_task_source_kind.clone(), resolved_task);
+        })
+    });
+
+    cx.update(|cx| {
+        let all_tasks = project
+            .update(cx, |project, cx| {
+                project.task_inventory().update(cx, |inventory, cx| {
+                    inventory.remove_local_static_source(Path::new("/the-root/.zed/tasks.json"));
+                    inventory.add_source(
+                        global_task_source_kind.clone(),
+                        |cx| {
+                            cx.new_model(|_| {
+                                let source = TestTaskSource {
+                                    tasks: TaskTemplates(vec![TaskTemplate {
+                                        label: "cargo check".to_string(),
+                                        command: "cargo".to_string(),
+                                        args: vec![
+                                            "check".to_string(),
+                                            "--all".to_string(),
+                                            "--all-targets".to_string(),
+                                        ],
+                                        env: HashMap::from_iter(Some((
+                                            "RUSTFLAGS".to_string(),
+                                            "-Zunstable-options".to_string(),
+                                        ))),
+                                        ..TaskTemplate::default()
+                                    }]),
+                                };
+                                Box::new(source) as Box<_>
+                            })
+                        },
+                        cx,
+                    );
+                    let (mut old, new) = inventory.used_and_current_resolved_tasks(
+                        None,
+                        Some(workree_id),
+                        &task_context,
+                        cx,
+                    );
+                    old.extend(new);
+                    old
+                })
+            })
+            .into_iter()
+            .map(|(source_kind, task)| {
+                let resolved = task.resolved.unwrap();
+                (
+                    source_kind,
+                    task.resolved_label,
+                    resolved.args,
+                    resolved.env,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_tasks,
+            vec![
+                (
+                    TaskSourceKind::Worktree {
+                        id: workree_id,
+                        abs_path: PathBuf::from("/the-root/b/.zed/tasks.json"),
+                        id_base: "local_tasks_for_worktree",
+                    },
+                    "cargo check".to_string(),
+                    vec!["check".to_string()],
+                    HashMap::default(),
+                ),
+                (
+                    TaskSourceKind::Worktree {
+                        id: workree_id,
+                        abs_path: PathBuf::from("/the-root/.zed/tasks.json"),
+                        id_base: "local_tasks_for_worktree",
+                    },
+                    "cargo check".to_string(),
+                    vec![
+                        "check".to_string(),
+                        "--all".to_string(),
+                        "--all-targets".to_string()
+                    ],
+                    HashMap::from_iter(Some((
+                        "RUSTFLAGS".to_string(),
+                        "-Zunstable-options".to_string()
+                    ))),
+                ),
+            ]
+        );
+    });
+}
+
+struct TestTaskSource {
+    tasks: TaskTemplates,
+}
+
+impl TaskSource for TestTaskSource {
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn tasks_to_schedule(&mut self, _: &mut ModelContext<Box<dyn TaskSource>>) -> TaskTemplates {
+        self.tasks.clone()
+    }
 }
 
 #[gpui::test]
@@ -2520,7 +2665,7 @@ async fn test_apply_code_actions_with_commands(cx: &mut gpui::TestAppContext) {
         .next()
         .await;
 
-    let action = actions.await.unwrap()[0].clone();
+    let action = actions.await[0].clone();
     let apply = project.update(cx, |project, cx| {
         project.apply_code_action(buffer.clone(), action, true, cx)
     });
@@ -2657,7 +2802,7 @@ async fn test_file_changes_multiple_times_on_disk(cx: &mut gpui::TestAppContext)
     )
     .await
     .unwrap();
-    worktree.next_event(cx);
+    worktree.next_event(cx).await;
 
     // Change the buffer's file again. Depending on the random seed, the
     // previous file change may still be in progress.
@@ -2668,7 +2813,7 @@ async fn test_file_changes_multiple_times_on_disk(cx: &mut gpui::TestAppContext)
     )
     .await
     .unwrap();
-    worktree.next_event(cx);
+    worktree.next_event(cx).await;
 
     cx.executor().run_until_parked();
     let on_disk_text = fs.load(Path::new("/dir/file1")).await.unwrap();
@@ -2712,7 +2857,7 @@ async fn test_edit_buffer_while_it_reloads(cx: &mut gpui::TestAppContext) {
     )
     .await
     .unwrap();
-    worktree.next_event(cx);
+    worktree.next_event(cx).await;
 
     cx.executor()
         .spawn(cx.executor().simulate_random_delay())
@@ -2842,7 +2987,7 @@ async fn test_rescan_and_remote_updates(cx: &mut gpui::TestAppContext) {
         }
     }));
 
-    let project = Project::test(Arc::new(RealFs), [dir.path()], cx).await;
+    let project = Project::test(Arc::new(RealFs::default()), [dir.path()], cx).await;
     let rpc = project.update(cx, |p, _| p.client.clone());
 
     let buffer_for_path = |path: &'static str, cx: &mut gpui::TestAppContext| {
@@ -3118,12 +3263,7 @@ async fn test_buffer_is_dirty(cx: &mut gpui::TestAppContext) {
             &[language::Event::Edited, language::Event::DirtyChanged]
         );
         events.lock().clear();
-        buffer.did_save(
-            buffer.version(),
-            buffer.as_rope().fingerprint(),
-            buffer.file().unwrap().mtime(),
-            cx,
-        );
+        buffer.did_save(buffer.version(), buffer.file().unwrap().mtime(), cx);
     });
 
     // after saving, the buffer is not dirty, and emits a saved event.
@@ -4402,6 +4542,385 @@ async fn test_create_entry(cx: &mut gpui::TestAppContext) {
     assert!(result.is_err())
 }
 
+#[gpui::test]
+async fn test_multiple_language_server_hovers(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/dir",
+        json!({
+            "a.tsx": "a",
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, ["/dir".as_ref()], cx).await;
+
+    let language_registry = project.read_with(cx, |project, _| project.languages().clone());
+    language_registry.add(tsx_lang());
+    let language_server_names = [
+        "TypeScriptServer",
+        "TailwindServer",
+        "ESLintServer",
+        "NoHoverCapabilitiesServer",
+    ];
+    let mut fake_tsx_language_servers = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        true,
+        FakeLspAdapter {
+            name: &language_server_names[0],
+            capabilities: lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _a = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[1],
+            capabilities: lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _b = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[2],
+            capabilities: lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _c = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[3],
+            capabilities: lsp::ServerCapabilities {
+                hover_provider: None,
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+
+    let buffer = project
+        .update(cx, |p, cx| p.open_local_buffer("/dir/a.tsx", cx))
+        .await
+        .unwrap();
+    cx.executor().run_until_parked();
+
+    let mut servers_with_hover_requests = HashMap::default();
+    for i in 0..language_server_names.len() {
+        let new_server = fake_tsx_language_servers.next().await.unwrap_or_else(|| {
+            panic!(
+                "Failed to get language server #{i} with name {}",
+                &language_server_names[i]
+            )
+        });
+        let new_server_name = new_server.server.name();
+        assert!(
+            !servers_with_hover_requests.contains_key(new_server_name),
+            "Unexpected: initialized server with the same name twice. Name: `{new_server_name}`"
+        );
+        let new_server_name = new_server_name.to_string();
+        match new_server_name.as_str() {
+            "TailwindServer" | "TypeScriptServer" => {
+                servers_with_hover_requests.insert(
+                    new_server_name.clone(),
+                    new_server.handle_request::<lsp::request::HoverRequest, _, _>(move |_, _| {
+                        let name = new_server_name.clone();
+                        async move {
+                            Ok(Some(lsp::Hover {
+                                contents: lsp::HoverContents::Scalar(lsp::MarkedString::String(
+                                    format!("{name} hover"),
+                                )),
+                                range: None,
+                            }))
+                        }
+                    }),
+                );
+            }
+            "ESLintServer" => {
+                servers_with_hover_requests.insert(
+                    new_server_name,
+                    new_server.handle_request::<lsp::request::HoverRequest, _, _>(
+                        |_, _| async move { Ok(None) },
+                    ),
+                );
+            }
+            "NoHoverCapabilitiesServer" => {
+                let _never_handled = new_server.handle_request::<lsp::request::HoverRequest, _, _>(
+                    |_, _| async move {
+                        panic!(
+                            "Should not call for hovers server with no corresponding capabilities"
+                        )
+                    },
+                );
+            }
+            unexpected => panic!("Unexpected server name: {unexpected}"),
+        }
+    }
+
+    let hover_task = project.update(cx, |project, cx| {
+        project.hover(&buffer, Point::new(0, 0), cx)
+    });
+    let _: Vec<()> = futures::future::join_all(servers_with_hover_requests.into_values().map(
+        |mut hover_request| async move {
+            hover_request
+                .next()
+                .await
+                .expect("All hover requests should have been triggered")
+        },
+    ))
+    .await;
+    assert_eq!(
+        vec!["TailwindServer hover", "TypeScriptServer hover"],
+        hover_task
+            .await
+            .into_iter()
+            .map(|hover| hover.contents.iter().map(|block| &block.text).join("|"))
+            .sorted()
+            .collect::<Vec<_>>(),
+        "Should receive hover responses from all related servers with hover capabilities"
+    );
+}
+
+#[gpui::test]
+async fn test_hovers_with_empty_parts(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/dir",
+        json!({
+            "a.ts": "a",
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, ["/dir".as_ref()], cx).await;
+
+    let language_registry = project.read_with(cx, |project, _| project.languages().clone());
+    language_registry.add(typescript_lang());
+    let mut fake_language_servers = language_registry.register_fake_lsp_adapter(
+        "TypeScript",
+        FakeLspAdapter {
+            capabilities: lsp::ServerCapabilities {
+                hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+
+    let buffer = project
+        .update(cx, |p, cx| p.open_local_buffer("/dir/a.ts", cx))
+        .await
+        .unwrap();
+    cx.executor().run_until_parked();
+
+    let fake_server = fake_language_servers
+        .next()
+        .await
+        .expect("failed to get the language server");
+
+    let mut request_handled =
+        fake_server.handle_request::<lsp::request::HoverRequest, _, _>(move |_, _| async move {
+            Ok(Some(lsp::Hover {
+                contents: lsp::HoverContents::Array(vec![
+                    lsp::MarkedString::String("".to_string()),
+                    lsp::MarkedString::String("      ".to_string()),
+                    lsp::MarkedString::String("\n\n\n".to_string()),
+                ]),
+                range: None,
+            }))
+        });
+
+    let hover_task = project.update(cx, |project, cx| {
+        project.hover(&buffer, Point::new(0, 0), cx)
+    });
+    let () = request_handled
+        .next()
+        .await
+        .expect("All hover requests should have been triggered");
+    assert_eq!(
+        Vec::<String>::new(),
+        hover_task
+            .await
+            .into_iter()
+            .map(|hover| hover.contents.iter().map(|block| &block.text).join("|"))
+            .sorted()
+            .collect::<Vec<_>>(),
+        "Empty hover parts should be ignored"
+    );
+}
+
+#[gpui::test]
+async fn test_multiple_language_server_actions(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/dir",
+        json!({
+            "a.tsx": "a",
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, ["/dir".as_ref()], cx).await;
+
+    let language_registry = project.read_with(cx, |project, _| project.languages().clone());
+    language_registry.add(tsx_lang());
+    let language_server_names = [
+        "TypeScriptServer",
+        "TailwindServer",
+        "ESLintServer",
+        "NoActionsCapabilitiesServer",
+    ];
+    let mut fake_tsx_language_servers = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        true,
+        FakeLspAdapter {
+            name: &language_server_names[0],
+            capabilities: lsp::ServerCapabilities {
+                code_action_provider: Some(lsp::CodeActionProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _a = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[1],
+            capabilities: lsp::ServerCapabilities {
+                code_action_provider: Some(lsp::CodeActionProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _b = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[2],
+            capabilities: lsp::ServerCapabilities {
+                code_action_provider: Some(lsp::CodeActionProviderCapability::Simple(true)),
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+    let _c = language_registry.register_specific_fake_lsp_adapter(
+        "tsx",
+        false,
+        FakeLspAdapter {
+            name: &language_server_names[3],
+            capabilities: lsp::ServerCapabilities {
+                code_action_provider: None,
+                ..lsp::ServerCapabilities::default()
+            },
+            ..FakeLspAdapter::default()
+        },
+    );
+
+    let buffer = project
+        .update(cx, |p, cx| p.open_local_buffer("/dir/a.tsx", cx))
+        .await
+        .unwrap();
+    cx.executor().run_until_parked();
+
+    let mut servers_with_actions_requests = HashMap::default();
+    for i in 0..language_server_names.len() {
+        let new_server = fake_tsx_language_servers.next().await.unwrap_or_else(|| {
+            panic!(
+                "Failed to get language server #{i} with name {}",
+                &language_server_names[i]
+            )
+        });
+        let new_server_name = new_server.server.name();
+        assert!(
+            !servers_with_actions_requests.contains_key(new_server_name),
+            "Unexpected: initialized server with the same name twice. Name: `{new_server_name}`"
+        );
+        let new_server_name = new_server_name.to_string();
+        match new_server_name.as_str() {
+            "TailwindServer" | "TypeScriptServer" => {
+                servers_with_actions_requests.insert(
+                    new_server_name.clone(),
+                    new_server.handle_request::<lsp::request::CodeActionRequest, _, _>(
+                        move |_, _| {
+                            let name = new_server_name.clone();
+                            async move {
+                                Ok(Some(vec![lsp::CodeActionOrCommand::CodeAction(
+                                    lsp::CodeAction {
+                                        title: format!("{name} code action"),
+                                        ..lsp::CodeAction::default()
+                                    },
+                                )]))
+                            }
+                        },
+                    ),
+                );
+            }
+            "ESLintServer" => {
+                servers_with_actions_requests.insert(
+                    new_server_name,
+                    new_server.handle_request::<lsp::request::CodeActionRequest, _, _>(
+                        |_, _| async move { Ok(None) },
+                    ),
+                );
+            }
+            "NoActionsCapabilitiesServer" => {
+                let _never_handled = new_server
+                    .handle_request::<lsp::request::CodeActionRequest, _, _>(|_, _| async move {
+                        panic!(
+                            "Should not call for code actions server with no corresponding capabilities"
+                        )
+                    });
+            }
+            unexpected => panic!("Unexpected server name: {unexpected}"),
+        }
+    }
+
+    let code_actions_task = project.update(cx, |project, cx| {
+        project.code_actions(&buffer, 0..buffer.read(cx).len(), cx)
+    });
+    let _: Vec<()> = futures::future::join_all(servers_with_actions_requests.into_values().map(
+        |mut code_actions_request| async move {
+            code_actions_request
+                .next()
+                .await
+                .expect("All code actions requests should have been triggered")
+        },
+    ))
+    .await;
+    assert_eq!(
+        vec!["TailwindServer code action", "TypeScriptServer code action"],
+        code_actions_task
+            .await
+            .into_iter()
+            .map(|code_action| code_action.lsp_action.title)
+            .sorted()
+            .collect::<Vec<_>>(),
+        "Should receive code actions responses from all related servers with hover capabilities"
+    );
+}
+
 async fn search(
     project: &Model<Project>,
     query: SearchQuery,
@@ -4504,5 +5023,19 @@ fn typescript_lang() -> Arc<Language> {
             ..Default::default()
         },
         Some(tree_sitter_typescript::language_typescript()),
+    ))
+}
+
+fn tsx_lang() -> Arc<Language> {
+    Arc::new(Language::new(
+        LanguageConfig {
+            name: "tsx".into(),
+            matcher: LanguageMatcher {
+                path_suffixes: vec!["tsx".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Some(tree_sitter_typescript::language_tsx()),
     ))
 }
